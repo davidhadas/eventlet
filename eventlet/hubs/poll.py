@@ -80,34 +80,40 @@ class Hub(BaseHub):
             if seconds:
                 sleep(seconds)
             return
-        try:
-            presult = self.do_poll(seconds)
-        except (IOError, select.error), e:
-            if get_errno(e) == errno.EINTR:
-                return
-            raise
+
         SYSTEM_EXCEPTIONS = self.SYSTEM_EXCEPTIONS
-
-        if self.debug_blocking:
-            self.block_detect_pre()
-
-        for fileno, event in presult:
+        while True:  # Poll until there is no work
             try:
-                if event & READ_MASK:
-                    readers.get(fileno, noop).cb(fileno)
-                if event & WRITE_MASK:
-                    writers.get(fileno, noop).cb(fileno)
-                if event & select.POLLNVAL:
-                    self.remove_descriptor(fileno)
+                presult = self.do_poll(seconds)
+                seconds = 0  # Never sleep more than once
+            except (IOError, select.error), e:
+                if get_errno(e) == errno.EINTR:
                     continue
-                if event & EXC_MASK:
-                    readers.get(fileno, noop).cb(fileno)
-                    writers.get(fileno, noop).cb(fileno)
-            except SYSTEM_EXCEPTIONS:
                 raise
-            except:
-                self.squelch_exception(fileno, sys.exc_info())
-                clear_sys_exc_info()
+
+            if len(presult) == 0:  # No more work...
+                return
+
+            if self.debug_blocking:
+                self.block_detect_pre()
+
+            for fileno, event in presult:
+                try:
+                    if event & READ_MASK:
+                        readers.get(fileno, noop).cb(fileno)
+                    if event & WRITE_MASK:
+                        writers.get(fileno, noop).cb(fileno)
+                    if event & select.POLLNVAL:
+                        self.remove_descriptor(fileno)
+                        continue
+                    if event & EXC_MASK:
+                        readers.get(fileno, noop).cb(fileno)
+                        writers.get(fileno, noop).cb(fileno)
+                except SYSTEM_EXCEPTIONS:
+                    raise
+                except:
+                    self.squelch_exception(fileno, sys.exc_info())
+                    clear_sys_exc_info()
         
         if self.debug_blocking:
             self.block_detect_post()

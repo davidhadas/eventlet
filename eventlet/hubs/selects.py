@@ -31,27 +31,33 @@ class Hub(BaseHub):
             if seconds:
                 time.sleep(seconds)
             return
-        try:
-            r, w, er = select.select(readers.keys(), writers.keys(), readers.keys() + writers.keys(), seconds)
-        except select.error, e:
-            if get_errno(e) == errno.EINTR:
-                return
-            elif get_errno(e) in BAD_SOCK:
-                self._remove_bad_fds()
-                return
-            else:
-                raise
 
-        for fileno in er:
-            readers.get(fileno, noop).cb(fileno)
-            writers.get(fileno, noop).cb(fileno)
-            
-        for listeners, events in ((readers, r), (writers, w)):
-            for fileno in events:
-                try:
-                    listeners.get(fileno, noop).cb(fileno)
-                except self.SYSTEM_EXCEPTIONS:
+        while True: # Select until there is no work
+            try:
+                r, w, er = select.select(readers.keys(), writers.keys(), readers.keys() + writers.keys(), seconds)
+                seconds = 0 # Never sleep more than once 
+            except select.error, e:
+                if get_errno(e) == errno.EINTR:
+                    continue
+                elif get_errno(e) in BAD_SOCK:
+                    self._remove_bad_fds()
+                    continue
+                else:
                     raise
-                except:
-                    self.squelch_exception(fileno, sys.exc_info())
-                    clear_sys_exc_info()
+
+            for fileno in er:
+                readers.get(fileno, noop).cb(fileno)
+                writers.get(fileno, noop).cb(fileno)
+
+            if len(r) == 0 and len(w) == 0: # No more work...
+                return
+
+            for listeners, events in ((readers, r), (writers, w)):
+                for fileno in events:
+                    try:
+                        listeners.get(fileno, noop).cb(fileno)
+                    except self.SYSTEM_EXCEPTIONS:
+                        raise
+                    except:
+                        self.squelch_exception(fileno, sys.exc_info())
+                        clear_sys_exc_info()
