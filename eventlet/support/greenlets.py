@@ -6,7 +6,10 @@ try:
     GreenletExit = greenlet.greenlet.GreenletExit
     preserves_excinfo = (distutils.version.LooseVersion(greenlet.__version__)
             >= distutils.version.LooseVersion('0.3.2'))
-    greenlet = greenlet.greenlet
+    # greenlet = greenlet.greenlet
+    class greenlet(greenlet.greenlet):
+        active_clock = 0
+        idleness = 0
 except ImportError, e:
     raise
     try:

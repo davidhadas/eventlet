@@ -17,6 +17,7 @@ class Timer(object):
         calling timer.schedule() or runloop.add_timer(timer).
         """
         self.seconds = seconds
+        self.idleness = False
         self.tpl = cb, args, kw
         self.called = False
         if _g_debug:

@@ -130,6 +130,28 @@ class Timeout(BaseException):
             return True
 
 
+class IdlenessTimeout(Timeout):
+    def start(self):
+        """Schedule the timeout.  This is called on construction, so
+        it should not be called explicitly, unless the timer has been
+        canceled. """
+        assert not self.pending, \
+               '%r is already started; to restart it, cancel it first' % self
+        if self.seconds is None: # "fake" timeout (never expires)
+            self.timer = None
+            return self
+
+        if self.exception is None or isinstance(self.exception, bool): # timeout that raises self
+            self.timer = get_hub().schedule_call_idleness(
+                self.seconds, greenlet.getcurrent().throw, self)
+        else: # regular timeout with user-provided exception
+            self.timer = get_hub().schedule_call_idleness(
+                self.seconds, greenlet.getcurrent().throw, self.exception)
+        return self
+
+
+
+
 def with_timeout(seconds, function, *args, **kwds):
     """Wrap a call to some (yielding) function with a timeout; if the called
     function fails to return before the timeout, cancel it and return a flag

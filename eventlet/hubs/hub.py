@@ -35,6 +35,7 @@ class FdListener(object):
         self.evtype = evtype
         self.fileno = fileno
         self.cb = cb
+
     def __repr__(self):
         return "%s(%r, %r, %r)" % (type(self).__name__, self.evtype, self.fileno, self.cb)
     __str__ = __repr__
@@ -87,6 +88,7 @@ class BaseHub(object):
         self.debug_exceptions = True
         self.debug_blocking = False
         self.debug_blocking_resolution = 1
+        self.active = set()
 
     def block_detect_pre(self):
         # shortest alarm we can possibly raise is one second
@@ -103,7 +105,7 @@ class BaseHub(object):
         signal.alarm(0)
 
     def add(self, evtype, fileno, cb):
-        """ Signals an intent to or write a particular file descriptor.
+        """ Signals an intent to read or write a particular file descriptor.
 
         The *evtype* argument is either the constant READ or WRITE.
 
@@ -112,7 +114,13 @@ class BaseHub(object):
         The *cb* argument is the callback which will be called when the file
         is ready for reading/writing.
         """
-        listener = self.lclass(evtype, fileno, cb)
+        g = greenlet.getcurrent()
+        # Update the active list whenever a callback is called
+        def _cb(fileno):
+            if hasattr(g,'idleness'):
+                self.active.add(g)
+            cb(fileno)
+        listener = self.lclass(evtype, fileno, _cb)
         bucket = self.listeners[evtype]
         if fileno in bucket:
             if g_prevent_multiple_readers:
@@ -220,6 +228,7 @@ class BaseHub(object):
             self.running = True
             self.stopping = False
             while not self.stopping:
+                clock = self.clock()
                 self.prepare_timers()
                 if self.debug_blocking:
                     self.block_detect_pre()
@@ -236,10 +245,16 @@ class BaseHub(object):
                     self.wait(sleep_time)
                 else:
                     self.wait(0)
+                cycle_time = self.clock() - clock
+                # update the active_clock for all active greenlets
+                while len(self.active):
+                    g = self.active.pop()
+                    g.active_clock += cycle_time
             else:
                 self.timers_canceled = 0
                 del self.timers[:]
                 del self.next_timers[:]
+                self.active = set()
         finally:
             self.running = False
             self.stopping = False
@@ -324,16 +339,36 @@ class BaseHub(object):
         self.add_timer(t)
         return t
 
+    def schedule_call_idleness(self, seconds, cb, *args, **kw):
+        """Schedule a callable to be called after 'seconds' seconds have
+        elapsed. Cancel the timer if greenlet has exited.
+            count only idle time - i.e. non active time passing.
+            seconds: The number of idle seconds to wait.
+            cb: The callable to call after the given time.
+            *args: Arguments to pass to the callable when called.
+            **kw: Keyword arguments to pass to the callable when called.
+        """
+        g = greenlet.getcurrent()
+        g.idleness = 1 # getattr(g, 'idleness', 0) + 1
+        t = timer.LocalTimer(seconds, cb, *args, **kw)
+        # mark the timer to calculate idle time
+        t.idleness = True
+        # Set the timer to the initial active_clock of the greenlet
+        timer.active_clock = g.active_clock
+        self.add_timer(t)
+        return t
+
     def fire_timers(self, when):
         t = self.timers
         heappop = heapq.heappop
+        heappush = heapq.heappush
 
         while t:
             next = t[0]
 
             exp = next[0]
             timer = next[1]
-
+                
             if when < exp:
                 break
 
@@ -343,6 +378,12 @@ class BaseHub(object):
                 if timer.called:
                     self.timers_canceled -= 1
                 else:
+                    if timer.idleness and timer.greenlet:
+                        exp += timer.greenlet.active_clock - timer.active_clock
+                        timer.active_clock = timer.greenlet.active_clock
+                        if when < exp:
+                            heappush(exp, timer)
+                            continue
                     timer()
             except self.SYSTEM_EXCEPTIONS:
                 raise
