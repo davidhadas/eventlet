@@ -348,10 +348,11 @@ class BaseHub(object):
             *args: Arguments to pass to the callable when called.
             **kw: Keyword arguments to pass to the callable when called.
         """
+        # mark the greenlent to calculate idle time
         g = greenlet.getcurrent()
-        g.idleness = 1 # getattr(g, 'idleness', 0) + 1
+        g.idleness = 1  # may be extended in the future to counting timers
         t = timer.LocalTimer(seconds, cb, *args, **kw)
-        # mark the timer to calculate idle time
+        # mark the timer to consider idle time
         t.idleness = True
         # Set the timer to the initial active_clock of the greenlet
         timer.active_clock = g.active_clock
@@ -368,7 +369,7 @@ class BaseHub(object):
 
             exp = next[0]
             timer = next[1]
-                
+
             if when < exp:
                 break
 
@@ -378,7 +379,8 @@ class BaseHub(object):
                 if timer.called:
                     self.timers_canceled -= 1
                 else:
-                    if timer.idleness and timer.greenlet:
+                    # if idleness timer add active time to timeout
+                    if timer.idleness:
                         exp += timer.greenlet.active_clock - timer.active_clock
                         timer.active_clock = timer.greenlet.active_clock
                         if when < exp:
